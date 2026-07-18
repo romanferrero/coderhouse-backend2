@@ -1,0 +1,29 @@
+{
+    "name": "plataforma-eventos-deportivos",
+    "version": "1.0.0",
+    "description": "API REST para una plataforma de eventos deportivos e inscripciones - Coderhouse Backend II",
+    "main": "src/server.js",
+    "type": "module",
+    "scripts": {
+        "start": "node src/server.js",
+        "dev": "nodemon src/server.js"
+    },
+    "keywords": [
+        "express",
+        "mongodb",
+        "mongoose",
+        "eventos",
+        "deportes",
+        "api-rest"
+    ],
+    "author": "Roman Ferrero",
+    "license": "ISC",
+    "dependencies": {
+        "dotenv": "^16.6.1",
+        "express": "^4.22.2",
+        "mongoose": "^8.24.1"
+    },
+    "devDependencies": {
+        "nodemon": "^3.1.14"
+    }
+}

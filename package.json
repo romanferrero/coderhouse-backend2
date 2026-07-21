@@ -19,6 +19,7 @@
     "author": "Roman Ferrero",
     "license": "ISC",
     "dependencies": {
+        "bcrypt": "^5.1.1",
         "dotenv": "^16.6.1",
         "express": "^4.22.2",
         "mongoose": "^8.24.1"

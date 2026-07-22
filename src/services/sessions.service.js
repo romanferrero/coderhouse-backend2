@@ -1,5 +1,5 @@
 import { usersRepository } from '../repositories/users.repository.js';
-import { hashPassword } from '../utils/hash.js';
+import { hashPassword, isValidPassword } from '../utils/hash.js';
 
 // Formato de email razonable: algo@algo.algo sin espacios. No pretende cubrir
 // el RFC completo, solo descartar entradas evidentemente invalidas.
@@ -53,6 +53,30 @@ class SessionsService {
         });
 
         return this.toPublicUser(created);
+    }
+
+    // valida las credenciales y, si estan bien, devuelve el usuario publico (sin
+    // password). si algo no cierra tira siempre el mismo 401 generico: no avisa
+    // si el email no existe o si la contrasena esta mal, asi no filtramos que
+    // emails hay registrados.
+    async login({ email, password } = {}) {
+        if (!email || !password) {
+            throw httpError(401, 'Credenciales invalidas');
+        }
+
+        const normalizedEmail = String(email).trim().toLowerCase();
+
+        const user = await this.repository.getByEmail(normalizedEmail);
+        if (!user) {
+            throw httpError(401, 'Credenciales invalidas');
+        }
+
+        const passwordMatches = await isValidPassword(password, user.password);
+        if (!passwordMatches) {
+            throw httpError(401, 'Credenciales invalidas');
+        }
+
+        return this.toPublicUser(user);
     }
 
     // Nunca expone el password (ni hasheado) y renombra _id -> id.

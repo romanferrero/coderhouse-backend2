@@ -1,4 +1,3 @@
-import { sessionsService } from '../services/sessions.service.js';
 import { signToken } from '../utils/jwt.js';
 import { config } from '../config/env.config.js';
 import { success, message } from '../utils/apiResponse.js';
@@ -19,18 +18,17 @@ const cookieBaseOptions = {
 // al setearla le sumamos cuanto vive: 1h, igual que la expiracion del jwt.
 const cookieOptions = { ...cookieBaseOptions, maxAge: 3600000 };
 
-// solo traduce http <-> service: la validacion, normalizacion y el hash de la
-// contrasena viven en el service. los errores se van al errorHandler.
-export const register = async (req, res) => {
-    const user = await sessionsService.register(req.body);
-
-    res.status(201).json(success(user));
+// la estrategia 'register' ya valido, normalizo, hasheo y persistio: dejo el
+// usuario publico (sin password) en req.user y aca solo lo devolvemos.
+export const register = (req, res) => {
+    res.status(201).json(success(req.user));
 };
 
-// deja que el service valide, firma un jwt con lo minimo y lo mete en la cookie
-// httpOnly. el token nunca sale en el body.
-export const login = async (req, res) => {
-    const user = await sessionsService.login(req.body);
+// la estrategia 'login' ya valido las credenciales y dejo el usuario publico en
+// req.user. el jwt lo genera el controller (no la estrategia): firma lo minimo y
+// lo mete en la cookie httpOnly. el token nunca sale en el body.
+export const login = (req, res) => {
+    const user = req.user;
 
     const token = signToken({ id: user.id, email: user.email, role: user.role });
 
@@ -38,8 +36,8 @@ export const login = async (req, res) => {
     res.status(200).json(message('Login correcto'));
 };
 
-// el middleware auth ya verifico el jwt y dejo el payload en req.user, que trae
-// solo { id, email, role } (nada de password).
+// la estrategia 'current' ya verifico el jwt y dejo el payload en req.user, que
+// trae solo { id, email, role } (nada de password).
 export const current = (req, res) => {
     const { id, email, role } = req.user;
 

@@ -14,8 +14,9 @@ const httpError = (status, message) => {
     return err;
 };
 
-// Capa de negocio de autenticacion. Aca viven las reglas de registro; login,
-// JWT y current se suman en las proximas entregas.
+// capa de negocio de auth. aca viven las reglas de registro y la validacion de
+// credenciales del login. las estrategias de passport orquestan estos metodos
+// (ver config/passport.config.js); el jwt lo firma el controller.
 class SessionsService {
     constructor(repository) {
         this.repository = repository;

@@ -7,8 +7,8 @@ const SALT_ROUNDS = 10;
 // registro y desde cualquier flujo que necesite persistir credenciales.
 export const hashPassword = (password) => bcrypt.hash(password, SALT_ROUNDS);
 
-// Compara una contrasena en texto plano contra su hash. Se usa en el login
-// de la proxima entrega.
+// compara una contrasena en texto plano contra su hash. la usa el login para
+// validar credenciales.
 export const isValidPassword = (password, hash) => bcrypt.compare(password, hash);
 
 export default { hashPassword, isValidPassword };

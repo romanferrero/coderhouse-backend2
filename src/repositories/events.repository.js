@@ -14,6 +14,18 @@ class EventsRepository {
     async getById(id) {
         return this.dao.getById(id);
     }
+
+    async create(eventData) {
+        return this.dao.create(eventData);
+    }
+
+    async update(id, data) {
+        return this.dao.update(id, data);
+    }
+
+    async delete(id) {
+        return this.dao.deleteById(id);
+    }
 }
 
 export const eventsRepository = new EventsRepository(eventDAO);

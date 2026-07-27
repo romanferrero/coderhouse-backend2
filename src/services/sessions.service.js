@@ -1,18 +1,11 @@
 import { usersRepository } from '../repositories/users.repository.js';
 import { hashPassword, isValidPassword } from '../utils/hash.js';
+import { httpError } from '../utils/httpError.js';
 
 // Formato de email razonable: algo@algo.algo sin espacios. No pretende cubrir
 // el RFC completo, solo descartar entradas evidentemente invalidas.
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
-
-// Crea un Error con status HTTP para que el errorHandler global arme la
-// respuesta { status: 'error', message } con el codigo correspondiente.
-const httpError = (status, message) => {
-    const err = new Error(message);
-    err.status = status;
-    return err;
-};
 
 // capa de negocio de auth. aca viven las reglas de registro y la validacion de
 // credenciales del login. las estrategias de passport orquestan estos metodos

@@ -7,6 +7,10 @@ class UsersRepository {
         this.dao = dao;
     }
 
+    async getAll() {
+        return this.dao.getAll();
+    }
+
     async getByEmail(email) {
         return this.dao.getByEmail(email);
     }

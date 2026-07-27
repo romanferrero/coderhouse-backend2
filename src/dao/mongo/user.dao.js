@@ -2,6 +2,13 @@ import { User } from '../../models/User.js';
 import { isDbConnected } from '../../config/db.js';
 
 class UserDAO {
+    // Sin conexion devuelve lista vacia en vez de dejar la query en buffer.
+    async getAll() {
+        if (!isDbConnected()) return [];
+
+        return User.find().lean();
+    }
+
     // Devuelve null sin conexion: mongoose dejaria la query en buffer hasta
     // agotar el timeout y la request colgaria.
     async getByEmail(email) {

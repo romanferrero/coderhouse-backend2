@@ -7,8 +7,9 @@ class EventsRepository {
         this.dao = dao;
     }
 
-    async getAll() {
-        return this.dao.getAll();
+    // no hay un getAll() a proposito: el listado siempre pasa por paginacion.
+    async getPaginated(options) {
+        return this.dao.getPaginated(options);
     }
 
     async getById(id) {
@@ -21,10 +22,6 @@ class EventsRepository {
 
     async update(id, data) {
         return this.dao.update(id, data);
-    }
-
-    async delete(id) {
-        return this.dao.deleteById(id);
     }
 }
 

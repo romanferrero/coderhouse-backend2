@@ -9,6 +9,9 @@ const eventSchema = new mongoose.Schema({
     venue: { type: String, required: true },
     date: { type: Date, required: true },
     capacity: { type: Number, required: true, min: 1 },
+    // dueño del evento: el organizer que lo creo. lo usamos para el chequeo de
+    // propiedad (un organizer solo modifica lo suyo; el admin, cualquiera).
+    organizer: { type: mongoose.Schema.Types.ObjectId, ref: 'users', required: true, index: true },
     status: { type: Boolean, default: true }
 }, { timestamps: true });
 

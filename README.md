@@ -6,7 +6,9 @@ API REST para una plataforma de eventos deportivos e inscripciones, desarrollada
 
 Plataforma de **eventos deportivos** (partidos, torneos y carreras) e inscripciones. Los organizadores publican eventos con su disciplina, sede, fecha y cupo; en las proximas entregas los usuarios podran registrarse, iniciar sesion e inscribirse, con control de cupos y notificaciones.
 
-El servidor Express esta organizado por capas, con los recursos `events` y `sessions`. Incluye **autenticacion completa centralizada con Passport.js**: la validacion de registro, login y usuario actual vive en **estrategias de Passport** (`register`, `login` y `current`). El registro es seguro (validaciones, normalizacion de email y hash de contrasena con bcrypt), el **login firma un JWT** que viaja en una **cookie HTTP Only**, y `GET /api/sessions/current` queda protegida por la estrategia JWT. El sistema queda **preparado para sumar providers externos (Google, GitHub, etc.) sin tocar `app.js`**: alcanza con agregar una estrategia mas en `config/passport.config.js`. Roles y logica de inscripciones se suman en las siguientes entregas.
+El servidor Express esta organizado por capas, con los recursos `events`, `sessions` y `users`. Incluye **autenticacion completa centralizada con Passport.js**: la validacion de registro, login y usuario actual vive en **estrategias de Passport** (`register`, `login` y `current`). El registro es seguro (validaciones, normalizacion de email y hash de contrasena con bcrypt), el **login firma un JWT** que viaja en una **cookie HTTP Only**, y `GET /api/sessions/current` queda protegida por la estrategia JWT. El sistema queda **preparado para sumar providers externos (Google, GitHub, etc.) sin tocar `app.js`**: alcanza con agregar una estrategia mas en `config/passport.config.js`.
+
+Sobre esa base suma un **sistema de autorizacion por roles** (`user`, `organizer`, `admin`) con una **matriz de permisos** clara, un **middleware de autorizacion reutilizable** y rutas sensibles protegidas segun el rol. La API distingue correctamente entre **401** (sin sesion) y **403** (con sesion pero sin permiso), e incorpora una **validacion de propiedad de recursos**: un organizer solo puede modificar o cancelar los eventos que creo; el admin, cualquiera. La logica de inscripciones se suma en las siguientes entregas.
 
 ## Tecnologias
 
@@ -72,19 +74,23 @@ coderhouse-backend2/
 │   ├── config/                 # Configuracion centralizada
 │   │   ├── env.config.js       # Carga y expone las variables de entorno
 │   │   ├── db.js               # Conexion a MongoDB y estado de conexion
+│   │   ├── roles.js            # Constantes de roles (user/organizer/admin)
 │   │   └── passport.config.js  # Estrategias 'register', 'login' y 'current'
 │   ├── routes/                 # Definicion de rutas
 │   │   ├── index.router.js     # Agrupa las rutas bajo /api
 │   │   ├── health.router.js
-│   │   ├── events.router.js
-│   │   └── sessions.router.js
+│   │   ├── events.router.js    # GET publico; POST/PUT/DELETE con authenticate + authorize
+│   │   ├── sessions.router.js
+│   │   └── users.router.js     # GET /users protegida (solo admin)
 │   ├── controllers/            # Traducen HTTP <-> servicios
 │   │   ├── health.controller.js
 │   │   ├── events.controller.js
-│   │   └── sessions.controller.js # Setea/borra la cookie y firma el JWT
+│   │   ├── sessions.controller.js # Setea/borra la cookie y firma el JWT
+│   │   └── users.controller.js
 │   ├── services/               # Logica de negocio
-│   │   ├── events.service.js
-│   │   └── sessions.service.js # Registro y login: validaciones, hash y compare
+│   │   ├── events.service.js   # CRUD + chequeo de propiedad (organizer/admin)
+│   │   ├── sessions.service.js # Registro y login: validaciones, hash y compare
+│   │   └── users.service.js    # Listado de usuarios sin exponer el password
 │   ├── repositories/           # Intermedian entre servicios y DAO
 │   │   ├── events.repository.js
 │   │   └── users.repository.js
@@ -94,14 +100,16 @@ coderhouse-backend2/
 │   │       └── user.dao.js
 │   ├── models/                 # Esquemas de Mongoose
 │   │   ├── User.js             # first_name, last_name, email, password, role
-│   │   └── Event.js            # Campos base del evento deportivo
+│   │   └── Event.js            # Campos del evento + organizer (dueño)
 │   ├── middlewares/            # Middlewares transversales
-│   │   ├── authenticate.js     # Envuelve passport.authenticate y setea req.user
+│   │   ├── authenticate.js     # Auth: envuelve passport.authenticate, setea req.user, 401
+│   │   ├── authorize.js        # Autorizacion por roles: recibe roles permitidos, 403
 │   │   ├── errorHandler.js     # Manejo de errores global
 │   │   └── notFound.js         # Respuesta 404 en JSON
 │   └── utils/                  # Utilidades reutilizables
 │       ├── apiResponse.js      # Helpers de formato de respuesta
 │       ├── asyncHandler.js     # Captura errores de handlers async
+│       ├── httpError.js        # Crea Error con status HTTP para el errorHandler
 │       ├── jwt.js              # Firma y verificacion de JWT (jsonwebtoken)
 │       └── hash.js             # Hash y verificacion de contrasenas (bcrypt)
 ├── .env.example
@@ -119,12 +127,124 @@ Todas las rutas cuelgan del prefijo `/api`.
 | Metodo | Ruta                     | Descripcion                                          | Auth        |
 |--------|--------------------------|------------------------------------------------------|-------------|
 | GET    | `/api/health`            | Verifica que el servidor este activo                 | Publica     |
-| GET    | `/api/events`            | Lista de eventos (vacia por ahora)                   | Publica     |
+| GET    | `/api/events`            | Lista de eventos publicados                          | Publica     |
 | GET    | `/api/events/:eid`       | Detalle de un evento por id                          | Publica     |
+| POST   | `/api/events`            | Crea un evento                                       | **organizer / admin** |
+| PUT    | `/api/events/:eid`       | Modifica un evento (propiedad: organizer solo el suyo) | **organizer / admin** |
+| DELETE | `/api/events/:eid`       | Cancela un evento (propiedad: organizer solo el suyo)  | **organizer / admin** |
 | POST   | `/api/sessions/register` | Registro seguro de usuario                           | Publica     |
 | POST   | `/api/sessions/login`    | Inicio de sesion: valida credenciales y setea cookie | Publica     |
-| GET    | `/api/sessions/current`  | Devuelve el usuario autenticado (lee la cookie)      | **Protegida** |
+| GET    | `/api/sessions/current`  | Devuelve el usuario autenticado (lee la cookie)      | **Autenticada** |
 | POST   | `/api/sessions/logout`   | Cierra sesion borrando la cookie                     | Publica     |
+| GET    | `/api/users`             | Lista todos los usuarios                             | **admin**   |
+
+## Roles y autorizacion
+
+La API define **tres roles**, que viven como constantes en [`src/config/roles.js`](src/config/roles.js) (nunca se escriben "a mano" en las rutas):
+
+| Rol         | Para que sirve                                                        |
+|-------------|----------------------------------------------------------------------|
+| `user`      | Usuario comun. Es el rol **por defecto** de todo registro publico.   |
+| `organizer` | Publica y gestiona **sus propios** eventos.                          |
+| `admin`     | Gestiona **cualquier** evento y accede a rutas administrativas.      |
+
+> El campo `role` **no** se acepta desde el body del registro: todo usuario publico se crea con `role: "user"`. Ascender a `organizer` o `admin` es una tarea administrativa (fuera del registro publico), asi el rol no puede escalarse desde afuera.
+
+### Matriz de permisos
+
+| Accion                                   | user | organizer | admin |
+|------------------------------------------|:----:|:---------:|:-----:|
+| Consultar eventos publicados             |  ✅  |    ✅     |  ✅   |
+| Crear eventos                            |  ❌  |    ✅     |  ✅   |
+| Modificar / cancelar eventos **propios** |  ❌  |    ✅     |  ✅   |
+| Modificar / cancelar **cualquier** evento|  ❌  |    ❌     |  ✅   |
+| Ver todos los usuarios                   |  ❌  |    ❌     |  ✅   |
+
+### Los dos middlewares (separados y reutilizables)
+
+La autorizacion se resuelve con **dos middlewares independientes de las rutas**, que se encadenan:
+
+1. **Autenticacion** — [`src/middlewares/authenticate.js`](src/middlewares/authenticate.js): envuelve `passport.authenticate('current')`, lee el **JWT de la cookie**, lo valida y puebla `req.user`. Si no hay sesion valida responde **401**.
+2. **Autorizacion** — [`src/middlewares/authorize.js`](src/middlewares/authorize.js): recibe **los roles permitidos como parametro** (`authorize(ROLES.ORGANIZER, ROLES.ADMIN)`), los compara contra `req.user.role` y, si no coincide, responde **403**. Es totalmente reutilizable: cada ruta decide que roles acepta.
+
+En la ruta se ven siempre en ese orden (primero se sabe *quien sos*, despues *que podes hacer*):
+
+```js
+router.post('/',
+    authenticate('current'),                 // 401 si no hay sesion
+    authorize(ROLES.ORGANIZER, ROLES.ADMIN), // 403 si el rol no alcanza
+    asyncHandler(createEvent)
+);
+```
+
+### Propiedad de recursos (ownership)
+
+El middleware `authorize` valida el **rol**, pero no alcanza para decir *"este organizer puede tocar este evento puntual"*. Esa regla mas fina vive en el **service** ([`events.service.js`](src/services/events.service.js)), que necesita leer el dato para decidir:
+
+- **admin** → puede modificar/cancelar **cualquier** evento.
+- **organizer** → solo si el `organizer` del evento coincide con su id.
+- Si el evento **no existe** → **404**.
+- Si existe pero **no le pertenece** → **403**.
+
+Al crear un evento, el `organizer` se toma de `req.user.id` (nunca del body), asi el dueño queda fijado por la sesion.
+
+### 401 vs 403 (la diferencia clave)
+
+La API **nunca** usa el mismo codigo para los dos casos, ni cae en un 500 generico:
+
+| Situacion                                             | Codigo | Mensaje                                        |
+|-------------------------------------------------------|:------:|------------------------------------------------|
+| No hay cookie / token invalido o expirado             | `401`  | `No autenticado`                               |
+| Hay sesion, pero el rol no tiene permiso              | `403`  | `No tenes permisos para realizar esta accion`  |
+| Hay sesion y rol, pero el recurso no es suyo          | `403`  | `No podes gestionar un evento que no te pertenece` |
+| El recurso no existe                                   | `404`  | `Evento no encontrado`                         |
+| Faltan datos al crear/modificar                        | `400`  | `Faltan campos obligatorios: ...`              |
+
+**403 — autenticado pero sin permiso** (ej: `user` haciendo `POST /api/events`):
+
+```json
+{ "status": "error", "message": "No tenes permisos para realizar esta accion" }
+```
+
+**401 — ruta privada sin cookie**:
+
+```json
+{ "status": "error", "message": "No autenticado" }
+```
+
+### Casos a probar
+
+Con `curl` (`-c` guarda cookies, `-b` las envia). Se asume que ya existen usuarios con cada rol.
+
+```bash
+# --- login como user, organizer o admin guardando su cookie ---
+curl -X POST http://localhost:8080/api/sessions/login -H "Content-Type: application/json" \
+  -c user.txt -d '{ "email": "user@mail.com", "password": "Secreta123" }'
+
+# 1. POST /api/events con rol user -> 403
+curl -X POST http://localhost:8080/api/events -H "Content-Type: application/json" -b user.txt \
+  -d '{ "title": "Maraton", "description": "10k", "discipline": "running", "venue": "Parque", "date": "2026-10-01", "capacity": 100 }'
+
+# 2. POST /api/events con rol organizer -> 201
+curl -X POST http://localhost:8080/api/events -H "Content-Type: application/json" -b organizer.txt \
+  -d '{ "title": "Maraton", "description": "10k", "discipline": "running", "venue": "Parque", "date": "2026-10-01", "capacity": 100 }'
+
+# 3. Ruta administrativa con rol organizer -> 403
+curl http://localhost:8080/api/users -b organizer.txt
+
+# 4. Ruta administrativa con rol admin -> 200
+curl http://localhost:8080/api/users -b admin.txt
+
+# 5. Cualquier ruta privada sin cookie -> 401
+curl -X POST http://localhost:8080/api/events -H "Content-Type: application/json" \
+  -d '{ "title": "x" }'
+
+# 6. organizer modificando un evento ajeno -> 403
+curl -X PUT http://localhost:8080/api/events/<id-de-evento-de-otro> -H "Content-Type: application/json" \
+  -b organizer.txt -d '{ "title": "Editado" }'
+```
+
+> Para probar `organizer`/`admin` primero hay que asignarles ese rol (por ejemplo actualizando el campo `role` del usuario directamente en la base, ya que el registro publico siempre crea `user`).
 
 ## Registro de usuarios: `POST /api/sessions/register`
 
@@ -330,6 +450,5 @@ el cliente) y luego llamar a `current` y `logout`; el cliente reenvia la cookie 
 ## Proximas entregas
 
 - Estrategias de autenticacion con **providers externos** (Google / GitHub), sobre la base ya preparada en `passport.config.js`
-- **Roles** y autorizacion (usuario / organizador / administrador)
 - Gestion completa de eventos e **inscripciones** con control de cupos
 - Notificaciones

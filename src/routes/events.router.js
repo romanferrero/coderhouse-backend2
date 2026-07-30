@@ -7,6 +7,7 @@ import {
     updateEventStatus,
     cancelEvent
 } from '../controllers/events.controller.js';
+import { createTicket, getEventTickets } from '../controllers/tickets.controller.js';
 import { authenticate } from '../middlewares/authenticate.js';
 import { authorize } from '../middlewares/authorize.js';
 import { ROLES } from '../config/roles.js';
@@ -46,6 +47,28 @@ router.delete('/:eid',
     authenticate('current'),
     authorize(ROLES.ORGANIZER, ROLES.ADMIN),
     asyncHandler(cancelEvent)
+);
+
+// --- inscripciones de un evento ------------------------------------------
+// viven aca y no en tickets.router.js porque cuelgan de la url del evento. el
+// resto de las rutas de tickets (mis tickets, cancelar) estan en tickets.router.js.
+
+// inscribirse: alcanza con estar autenticado, sin importar el rol. no lleva
+// authorize porque no hay rol que sobre: un organizer o un admin tambien pueden
+// anotarse a un evento. el cupo, el estado del evento y los duplicados los valida
+// el tickets.service.
+router.post('/:eid/tickets',
+    authenticate('current'),
+    asyncHandler(createTicket)
+);
+
+// ver los inscriptos: rol organizer o admin (403 para un user comun) y, ademas, el
+// chequeo de propiedad que hace el service (un organizer solo ve los inscriptos de
+// sus propios eventos; el admin, los de cualquiera).
+router.get('/:eid/tickets',
+    authenticate('current'),
+    authorize(ROLES.ORGANIZER, ROLES.ADMIN),
+    asyncHandler(getEventTickets)
 );
 
 export default router;

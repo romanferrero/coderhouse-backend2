@@ -1,39 +1,51 @@
 import { ticketDAO } from '../dao/mongo/ticket.dao.js';
+import { TICKET_STATUS } from '../config/ticketStatus.js';
 
-// Aisla al service de la fuente de datos: si el DAO cambia de mongo a otra
-// persistencia, solo se toca esta capa.
+// Capa intermedia entre el service y el DAO. Los nombres son los del dominio
+// ("cuantos lugares hay tomados", "cancelame esta inscripcion") y el DAO se queda
+// con el como. No importa modelos de mongoose.
 class TicketsRepository {
     constructor(dao) {
         this.dao = dao;
     }
 
-    async create(ticketData) {
+    async createTicket(ticketData) {
         return this.dao.create(ticketData);
     }
 
-    async getById(id) {
-        return this.dao.getById(id);
+    async findById(id) {
+        return this.dao.findById(id);
     }
 
-    async getByUser(userId) {
-        return this.dao.getByUser(userId);
+    // historial completo de un inscripto, cancelados incluidos.
+    async findByUser(userId) {
+        return this.dao.findByUser(userId);
     }
 
-    async getByEvent(eventId) {
-        return this.dao.getByEvent(eventId);
+    async findByEvent(eventId) {
+        return this.dao.findByEvent(eventId);
     }
 
-    // lugares ya ocupados de un evento (solo tickets activos).
-    async countActiveByEvent(eventId) {
-        return this.dao.countActiveByEvent(eventId);
+    // lugares ya ocupados de un evento. son los de los tickets ACTIVOS: que un
+    // cancelado no cuente es justamente lo que hace que cancelar libere el cupo.
+    async countActiveTickets(eventId) {
+        return this.dao.countActiveQuantityByEvent(eventId);
     }
 
-    async findActiveByUserAndEvent(userId, eventId) {
+    // la inscripcion activa de un usuario en un evento, o null. la usa el service
+    // para cortar los duplicados.
+    async findActiveEnrollment(userId, eventId) {
         return this.dao.findActiveByUserAndEvent(userId, eventId);
     }
 
-    async update(id, data) {
-        return this.dao.update(id, data);
+    // cancelar es un cambio de estado con su sello de fecha, no un borrado: el
+    // documento queda en la base y sigue apareciendo en el historial. si se puede o
+    // no cancelar (dueño, estado terminal) lo decide el service.
+    async cancelTicket(id) {
+        return this.dao.updateById(id, {
+            status: TICKET_STATUS.CANCELLED,
+            cancelledAt: new Date()
+        });
     }
 }
 

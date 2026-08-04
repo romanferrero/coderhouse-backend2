@@ -1,21 +1,23 @@
 import { userDAO } from '../dao/mongo/user.dao.js';
 
-// Aisla al service de la fuente de datos: si el DAO cambia de mongo a otra
-// persistencia, solo se toca esta capa.
+// Capa intermedia entre el service y el DAO. Habla el idioma del dominio
+// ("buscame el usuario de este email") y traduce eso al filtro que entiende el DAO.
+// No importa modelos de mongoose: si mañana la persistencia deja de ser mongo,
+// solo se cambia el DAO que se le inyecta al constructor y esta capa queda igual.
 class UsersRepository {
     constructor(dao) {
         this.dao = dao;
     }
 
-    async getAll() {
-        return this.dao.getAll();
+    async findAll() {
+        return this.dao.find();
     }
 
-    async getByEmail(email) {
-        return this.dao.getByEmail(email);
+    async findByEmail(email) {
+        return this.dao.findOne({ email });
     }
 
-    async create(userData) {
+    async createUser(userData) {
         return this.dao.create(userData);
     }
 }

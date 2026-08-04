@@ -1,5 +1,6 @@
 import { signToken } from '../utils/jwt.js';
 import { config } from '../config/env.config.js';
+import { SessionUserDTO } from '../dto/user.dto.js';
 import { success, message } from '../utils/apiResponse.js';
 
 // la cookie donde viaja el jwt de la sesion.
@@ -18,8 +19,8 @@ const cookieBaseOptions = {
 // al setearla le sumamos cuanto vive: 1h, igual que la expiracion del jwt.
 const cookieOptions = { ...cookieBaseOptions, maxAge: 3600000 };
 
-// la estrategia 'register' ya valido, normalizo, hasheo y persistio: dejo el
-// usuario publico (sin password) en req.user y aca solo lo devolvemos.
+// la estrategia 'register' ya valido, normalizo, hasheo y persistio: dejo en
+// req.user el UserDTO que devolvio el service (sin password) y aca solo se responde.
 export const register = (req, res) => {
     res.status(201).json(success(req.user));
 };
@@ -36,12 +37,12 @@ export const login = (req, res) => {
     res.status(200).json(message('Login correcto'));
 };
 
-// la estrategia 'current' ya verifico el jwt y dejo el payload en req.user, que
-// trae solo { id, email, role } (nada de password).
+// la estrategia 'current' ya verifico el jwt y dejo el payload en req.user. el
+// payload no sale de la base sino del token, asi que no hay service que consultar:
+// el DTO se aplica aca, que es el borde de la respuesta. igual el password no
+// existe en el token, pero el recorte queda explicito en un solo lugar.
 export const current = (req, res) => {
-    const { id, email, role } = req.user;
-
-    res.status(200).json(success({ id, email, role }));
+    res.status(200).json(success(SessionUserDTO.from(req.user)));
 };
 
 // borra la cookie con las mismas opciones con las que se seteo, asi el navegador

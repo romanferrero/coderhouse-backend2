@@ -1,6 +1,7 @@
 import { ticketsRepository } from '../repositories/tickets.repository.js';
 import { eventsService } from './events.service.js';
 import { mailService } from './mail.service.js';
+import { TicketDTO } from '../dto/ticket.dto.js';
 import { httpError } from '../utils/httpError.js';
 import { generateReservationCode } from '../utils/reservationCode.js';
 import { ROLES } from '../config/roles.js';
@@ -23,9 +24,12 @@ const parseQuantity = (value) => {
     return quantity;
 };
 
-// Capa de negocio de las inscripciones. Aca viven TODAS las reglas: estado del
-// evento, fecha, cantidad, cupos disponibles, duplicados, propiedad del ticket y
-// reglas de cancelacion. Los controllers y las rutas no validan nada de esto.
+// Capa de negocio de las inscripciones. Habla con el repository (nunca con el DAO
+// ni con los modelos) y aca viven TODAS las reglas: estado del evento, fecha,
+// cantidad, cupos disponibles, duplicados, propiedad del ticket, reglas de
+// cancelacion y el aviso por email. Los controllers y las rutas no validan nada.
+//
+// Todo lo que sale hacia el controller pasa por TicketDTO.
 class TicketsService {
     constructor(repository) {
         this.repository = repository;
@@ -38,8 +42,10 @@ class TicketsService {
     // despues lo que si (duplicado y cupo), y recien al final se crea el ticket.
     async enroll(eventId, data = {}, requester) {
         // si el evento no existe (o el id no es un ObjectId valido) esto ya tira el
-        // 404 del events.service: la regla vive en un solo lugar.
-        const event = await eventsService.getEventById(eventId);
+        // 404 del events.service: la regla vive en un solo lugar. se pide la entidad
+        // completa (no el DTO) porque las reglas de abajo necesitan capacity y
+        // status, que son datos del dominio, no de la respuesta.
+        const event = await eventsService.findEventOrFail(eventId);
 
         this.assertEventIsOpen(event);
 
@@ -47,14 +53,14 @@ class TicketsService {
 
         // una sola inscripcion activa por usuario y evento. si quiere mas lugares,
         // cancela y se anota de nuevo con la cantidad correcta.
-        const existing = await this.repository.findActiveByUserAndEvent(requester.id, event._id);
+        const existing = await this.repository.findActiveEnrollment(requester.id, event._id);
         if (existing) {
             throw httpError(409, 'Ya tenes una inscripcion activa para este evento');
         }
 
         await this.assertHasCapacity(event, quantity);
 
-        const ticket = await this.repository.create({
+        const ticket = await this.repository.createTicket({
             user: requester.id,
             event: event._id,
             quantity,
@@ -66,7 +72,7 @@ class TicketsService {
         // inscripcion ya esta hecha y no se pierde por un problema de notificacion.
         await this.notifyEnrollment(ticket, event, requester);
 
-        return ticket;
+        return TicketDTO.from(ticket);
     }
 
     // avisa por email al inscripto. el nombre y el mail salen del usuario poblado
@@ -90,17 +96,17 @@ class TicketsService {
     // location). el id sale de la sesion, nunca de la url: asi nadie puede pedir
     // los tickets de otro cambiando un parametro.
     async getMyTickets(requester) {
-        return this.repository.getByUser(requester.id);
+        return TicketDTO.fromMany(await this.repository.findByUser(requester.id));
     }
 
     // inscriptos a un evento. lo ve el admin (cualquier evento) o el organizer
     // dueño del evento: la regla de propiedad se reusa del events.service, que ya
     // decide quien puede gestionar que (404 si no existe, 403 si es ajeno).
     async getEventTickets(eventId, requester) {
-        const event = await eventsService.getEventById(eventId);
+        const event = await eventsService.findEventOrFail(eventId);
         eventsService.assertCanManage(event, requester);
 
-        return this.repository.getByEvent(event._id);
+        return TicketDTO.fromMany(await this.repository.findByEvent(event._id));
     }
 
     // --- cancelacion --------------------------------------------------------
@@ -109,7 +115,7 @@ class TicketsService {
     // documento, asi queda el historial. como el calculo de cupo solo suma tickets
     // activos, el lugar se libera solo con este cambio de estado.
     async cancelTicket(ticketId, requester) {
-        const ticket = await this.getTicketById(ticketId);
+        const ticket = await this.findTicketOrFail(ticketId);
         this.assertCanManageTicket(ticket, requester);
 
         // cancelled es terminal: no se cancela dos veces ni se revive.
@@ -117,16 +123,16 @@ class TicketsService {
             throw httpError(409, 'La inscripcion ya estaba cancelada');
         }
 
-        return this.repository.update(ticket._id, {
-            status: TICKET_STATUS.CANCELLED,
-            cancelledAt: new Date()
-        });
+        // el "como" de la cancelacion (status + cancelledAt, sin borrar nada) vive
+        // en el repository; el "si se puede" es esta decision de negocio.
+        return TicketDTO.from(await this.repository.cancelTicket(ticket._id));
     }
 
-    // el 404 sale de aca y no del controller: es una regla del dominio ("esa
-    // inscripcion no existe").
-    async getTicketById(id) {
-        const ticket = await this.repository.getById(id);
+    // busca la inscripcion como entidad de dominio, para poder decidir sobre ella
+    // (dueño, estado). el 404 sale de aca y no del controller: es una regla del
+    // dominio ("esa inscripcion no existe").
+    async findTicketOrFail(id) {
+        const ticket = await this.repository.findById(id);
         if (!ticket) {
             throw httpError(404, 'Inscripcion no encontrada');
         }
@@ -165,7 +171,7 @@ class TicketsService {
     // tocar nada mas. el mensaje incluye cuantos lugares quedan para que el cliente
     // pueda reintentar con una cantidad que entre.
     async assertHasCapacity(event, quantity) {
-        const taken = await this.repository.countActiveByEvent(event._id);
+        const taken = await this.repository.countActiveTickets(event._id);
         const available = event.capacity - taken;
 
         if (available <= 0) {

@@ -1,4 +1,5 @@
 import { eventsRepository } from '../repositories/events.repository.js';
+import { EventDTO } from '../dto/event.dto.js';
 import { httpError } from '../utils/httpError.js';
 import { ROLES } from '../config/roles.js';
 import { EVENT_STATUS, EVENT_STATUS_VALUES } from '../config/eventStatus.js';
@@ -147,10 +148,13 @@ const buildListOptions = (query = {}) => {
     };
 };
 
-// Capa de negocio. Ademas de delegar en el repository, aca viven todas las reglas
-// del dominio: fechas, estados validos, capacidad, precio y el chequeo de
-// propiedad de los eventos (quien puede modificar/cancelar que). Los controllers
-// y las rutas no validan nada de esto.
+// Capa de negocio. Habla siempre con el repository (nunca con el DAO ni con los
+// modelos) y aca viven todas las reglas del dominio: fechas, estados validos,
+// capacidad, precio y el chequeo de propiedad de los eventos (quien puede
+// modificar/cancelar que). Los controllers y las rutas no validan nada de esto.
+//
+// Todo lo que sale hacia el controller pasa por EventDTO: la api no devuelve
+// documentos crudos de la base.
 class EventsService {
     constructor(repository) {
         this.repository = repository;
@@ -160,10 +164,10 @@ class EventsService {
     // (data + metadata) asi el controller no calcula nada.
     async getEvents(query = {}) {
         const { filter, sort, page, limit } = buildListOptions(query);
-        const { docs, total } = await this.repository.getPaginated({ filter, sort, page, limit });
+        const { docs, total } = await this.repository.findPaginated({ filter, sort, page, limit });
 
         return {
-            data: docs,
+            data: EventDTO.fromMany(docs),
             page,
             limit,
             total,
@@ -171,15 +175,25 @@ class EventsService {
         };
     }
 
+    // busca el evento como entidad de dominio: con todos sus campos, para que las
+    // reglas (propiedad, transiciones, cupo) trabajen sobre el dato completo. es de
+    // uso interno del dominio —lo reusan update, changeStatus y tickets.service—,
+    // no se devuelve nunca tal cual por la api.
+    //
     // el 404 sale de aca y no del controller: es una regla del dominio ("ese
-    // evento no existe"), y asi la reusan update y changeStatus.
-    async getEventById(id) {
-        const event = await this.repository.getById(id);
+    // evento no existe").
+    async findEventOrFail(id) {
+        const event = await this.repository.findById(id);
         if (!event) {
             throw httpError(404, 'Evento no encontrado');
         }
 
         return event;
+    }
+
+    // la version que si sale por la api: la misma busqueda, envuelta en el DTO.
+    async getEventById(id) {
+        return EventDTO.from(await this.findEventOrFail(id));
     }
 
     // crea el evento y lo deja asociado al organizer que lo publico (requester).
@@ -203,14 +217,14 @@ class EventsService {
             payload.status = parseStatus(data.status, CREATABLE_STATUS);
         }
 
-        return this.repository.create(payload);
+        return EventDTO.from(await this.repository.createEvent(payload));
     }
 
     // modifica un evento existente respetando la propiedad: el organizer solo
     // toca lo suyo, el admin cualquiera. si no existe es 404, si no le pertenece
     // es 403 (no un 500 generico).
     async updateEvent(id, data = {}, requester) {
-        const event = await this.getEventById(id);
+        const event = await this.findEventOrFail(id);
         this.assertCanManage(event, requester);
 
         // un evento cancelado queda congelado: no se edita ni se revive por PUT.
@@ -235,19 +249,19 @@ class EventsService {
             throw httpError(400, 'No hay campos para actualizar');
         }
 
-        return this.repository.update(id, changes);
+        return EventDTO.from(await this.repository.updateEvent(id, changes));
     }
 
     // unico camino para tocar el status: publicar, finalizar o cancelar. mismas
     // reglas de propiedad que el update.
     async changeStatus(id, status, requester) {
-        const event = await this.getEventById(id);
+        const event = await this.findEventOrFail(id);
         this.assertCanManage(event, requester);
 
         const nextStatus = parseStatus(status);
         this.assertStatusChange(event, nextStatus);
 
-        return this.repository.update(id, { status: nextStatus });
+        return EventDTO.from(await this.repository.changeStatus(id, nextStatus));
     }
 
     // el DELETE de la api entra por aca: cancelar es un cambio de estado, no se

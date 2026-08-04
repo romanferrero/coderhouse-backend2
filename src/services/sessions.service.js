@@ -1,4 +1,5 @@
 import { usersRepository } from '../repositories/users.repository.js';
+import { UserDTO } from '../dto/user.dto.js';
 import { hashPassword, isValidPassword } from '../utils/hash.js';
 import { httpError } from '../utils/httpError.js';
 
@@ -30,7 +31,7 @@ class SessionsService {
             throw httpError(400, `La contrasena debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres`);
         }
 
-        const existing = await this.repository.getByEmail(normalizedEmail);
+        const existing = await this.repository.findByEmail(normalizedEmail);
         if (existing) {
             throw httpError(409, 'El email ya esta registrado');
         }
@@ -39,14 +40,14 @@ class SessionsService {
 
         // El rol no se toma del body: se omite a proposito para que quede en
         // el default 'user' del modelo y no pueda escalarse desde el registro.
-        const created = await this.repository.create({
+        const created = await this.repository.createUser({
             first_name: String(first_name).trim(),
             last_name: String(last_name).trim(),
             email: normalizedEmail,
             password: hashedPassword
         });
 
-        return this.toPublicUser(created);
+        return UserDTO.from(created);
     }
 
     // valida las credenciales y, si estan bien, devuelve el usuario publico (sin
@@ -60,7 +61,9 @@ class SessionsService {
 
         const normalizedEmail = String(email).trim().toLowerCase();
 
-        const user = await this.repository.getByEmail(normalizedEmail);
+        // el repository devuelve el documento completo porque el hash hace falta
+        // para comparar; lo que sale del service ya pasa por el DTO.
+        const user = await this.repository.findByEmail(normalizedEmail);
         if (!user) {
             throw httpError(401, 'Credenciales invalidas');
         }
@@ -70,18 +73,7 @@ class SessionsService {
             throw httpError(401, 'Credenciales invalidas');
         }
 
-        return this.toPublicUser(user);
-    }
-
-    // Nunca expone el password (ni hasheado) y renombra _id -> id.
-    toPublicUser(user) {
-        return {
-            id: user._id.toString(),
-            first_name: user.first_name,
-            last_name: user.last_name,
-            email: user.email,
-            role: user.role
-        };
+        return UserDTO.from(user);
     }
 }
 

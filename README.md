@@ -12,7 +12,9 @@ Sobre esa base suma un **sistema de autorizacion por roles** (`user`, `organizer
 
 Encima de eso vive la **entidad central del dominio: los eventos**, con su **CRUD completo** (crear, listar, consultar, actualizar y cancelar), el **ciclo de vida por estados** (`draft` → `published` → `finished`, con `cancelled` como estado terminal) y las **reglas de negocio** del dominio validadas **en la capa de services**: nada de fechas pasadas, capacidad mayor a 0, precio no negativo, estados validos y transiciones coherentes. El listado publico soporta **filtros, paginacion y ordenamiento**, y **cancelar nunca borra**: es un cambio de estado.
 
-Por ultimo suma el **flujo completo de inscripciones**: la entidad **`Ticket`**, que relaciona usuario y evento **solo por referencias**, con su propio ciclo de estados (`pending` / `confirmed` / `cancelled`), **codigo de reserva unico** y **control de cupos** calculado sobre los tickets activos (los `cancelled` **no** ocupan lugar, asi cancelar libera el cupo automaticamente). Valida estado y fecha del evento, cantidad solicitada e **inscripciones duplicadas** —con un **indice unico parcial** como red de seguridad ante requests simultaneas—, permite **cancelar sin borrar** (guarda `cancelledAt` y conserva el historial) y envia un **email de confirmacion con Nodemailer**, con las credenciales siempre en variables de entorno.
+Sobre eso suma el **flujo completo de inscripciones**: la entidad **`Ticket`**, que relaciona usuario y evento **solo por referencias**, con su propio ciclo de estados (`pending` / `confirmed` / `cancelled`), **codigo de reserva unico** y **control de cupos** calculado sobre los tickets activos (los `cancelled` **no** ocupan lugar, asi cancelar libera el cupo automaticamente). Valida estado y fecha del evento, cantidad solicitada e **inscripciones duplicadas** —con un **indice unico parcial** como red de seguridad ante requests simultaneas—, permite **cancelar sin borrar** (guarda `cancelledAt` y conserva el historial) y envia un **email de confirmacion con Nodemailer**, con las credenciales siempre en variables de entorno.
+
+Por ultimo, todo eso quedo ordenado en una **arquitectura profesional por capas**: **DAO** (unico lugar que toca Mongoose), **Repository** (intermediario con vocabulario del dominio), **Services** (toda la logica de negocio) y **DTO** (control de que campos salen por la api, para que ninguna respuesta exponga el password, ni siquiera hasheado, ni siquiera dentro de un `populate`). Los controllers quedaron reducidos a coordinar request/response y el manejo de errores esta centralizado en un unico middleware. **El comportamiento externo de la api no cambio**: todas las rutas responden exactamente igual que antes. Ver [Arquitectura en capas](#arquitectura-en-capas).
 
 ## Tecnologias
 
@@ -98,27 +100,31 @@ coderhouse-backend2/
 │   │   ├── tickets.router.js   # /my-tickets y /:tid/cancel
 │   │   ├── sessions.router.js
 │   │   └── users.router.js     # GET /users protegida (solo admin)
-│   ├── controllers/            # Traducen HTTP <-> servicios
+│   ├── controllers/            # Solo coordinan request/response
 │   │   ├── health.controller.js
 │   │   ├── events.controller.js
 │   │   ├── tickets.controller.js
 │   │   ├── sessions.controller.js # Setea/borra la cookie y firma el JWT
 │   │   └── users.controller.js
-│   ├── services/               # Logica de negocio
+│   ├── services/               # Logica de negocio (consumen repositories)
 │   │   ├── events.service.js   # Reglas de negocio, estados, filtros y propiedad
 │   │   ├── tickets.service.js  # Cupos, duplicados, estados y propiedad del ticket
 │   │   ├── mail.service.js     # Arma y envia el mail de confirmacion
 │   │   ├── sessions.service.js # Registro y login: validaciones, hash y compare
-│   │   └── users.service.js    # Listado de usuarios sin exponer el password
-│   ├── repositories/           # Intermedian entre servicios y DAO
-│   │   ├── events.repository.js
-│   │   ├── tickets.repository.js
-│   │   └── users.repository.js
-│   ├── dao/                    # Acceso a datos
+│   │   └── users.service.js    # Listado de usuarios
+│   ├── dto/                    # Que campos salen por la api (nunca el password)
+│   │   ├── user.dto.js         # UserDTO, SessionUserDTO y UserRefDTO (populate)
+│   │   ├── event.dto.js        # EventDTO y EventRefDTO (populate)
+│   │   └── ticket.dto.js       # TicketDTO
+│   ├── repositories/           # Intermedian entre services y DAO (vocabulario de dominio)
+│   │   ├── events.repository.js  # findPaginated, changeStatus, cancelEvent
+│   │   ├── tickets.repository.js # countActiveTickets, findActiveEnrollment, cancelTicket
+│   │   └── users.repository.js   # findByEmail, findAll, createUser
+│   ├── dao/                    # Acceso a datos: unica capa que importa modelos
 │   │   └── mongo/
-│   │       ├── event.dao.js    # Query de filtros, paginacion, orden y populate
+│   │       ├── event.dao.js    # Query de filtros, orden, skip/limit y populate
 │   │       ├── ticket.dao.js   # Aggregate de cupos ocupados y populate
-│   │       └── user.dao.js
+│   │       └── user.dao.js     # find / findOne / create
 │   ├── models/                 # Esquemas de Mongoose
 │   │   ├── User.js             # first_name, last_name, email, password, role
 │   │   ├── Event.js            # Campos del evento + organizer (referencia)
@@ -141,13 +147,172 @@ coderhouse-backend2/
 └── README.md
 ```
 
-La arquitectura sigue el flujo por capas: **router → controller → service → repository → DAO → model**. La cadena completa esta implementada para `events` (CRUD completo), para `tickets` (inscripciones) y para el registro y login de `sessions`. La division de responsabilidades es estricta:
+## Arquitectura en capas
 
-- **router** → declara la ruta y encadena los middlewares (`authenticate`, `authorize`). No valida datos.
-- **controller** → traduce HTTP ↔ service: lee `req.body`/`req.query`/`req.params`, arma la respuesta. **Cero reglas de negocio.**
-- **service** → **todas** las reglas del dominio: campos obligatorios, fechas, capacidad, precio, estados validos, transiciones, **cupos, duplicados** y propiedad del recurso.
-- **repository / DAO** → unico lugar que habla con Mongo: filtros, paginacion, orden, `populate` y el `aggregate` que suma los cupos ocupados.
- La autenticacion esta **centralizada en `config/passport.config.js`** (estrategias `register`, `login` y `current`), que orquestan la logica de negocio del `sessions.service.js`; la firma del JWT vive en `utils/jwt.js`, el bcrypt en `utils/hash.js`, y el middleware `authenticate.js` solo delega en `passport.authenticate(...)`. Nada de esto vive en la ruta ni en `app.js` (que unicamente hace `passport.initialize()`).
+El flujo de una request es siempre el mismo y **cada capa solo conoce a la de abajo**:
+
+```
+request → router → middlewares → controller → service → repository → DAO → model (Mongoose) → MongoDB
+                                      ↑                                   
+response ←──────────────────────── DTO ←── entidad de dominio
+```
+
+La cadena completa esta implementada para `events` (CRUD), `tickets` (inscripciones) y `sessions`/`users`.
+
+### Responsabilidad de cada capa
+
+| Capa | Que hace | Que **no** hace |
+|------|----------|-----------------|
+| **router** | Declara la ruta y encadena middlewares (`authenticate`, `authorize`, `asyncHandler`). | No valida datos ni arma respuestas. |
+| **middlewares** | Cosas transversales: quien sos (401), que podes hacer (403), 404 de ruta y manejo de errores. | No conocen el dominio. |
+| **controller** | Lee `req.body` / `req.params` / `req.query`, llama **un** metodo del service y devuelve la respuesta con su status. | **No importa modelos**, no calcula cupos, no valida estados, no decide permisos sobre recursos. |
+| **service** | **Toda** la logica de negocio: campos obligatorios, fechas, capacidad, precio, transiciones de estado, **cupos**, **duplicados**, **propiedad del recurso** y el **envio del email**. Devuelve DTOs. | No importa modelos **ni DAOs**: solo habla con su repository. |
+| **repository** | Traduce el dominio a operaciones de datos: `findByEmail`, `countActiveTickets`, `findActiveEnrollment`, `cancelTicket`, `changeStatus`, `findPaginated` (que compone `find` + `count` y convierte "pagina N" en un `skip`). | No importa modelos ni usa sintaxis de mongo. |
+| **DAO** | Persistencia pura contra Mongoose: `find`, `findOne`, `findById`, `create`, `updateById`, `count`, el `aggregate` del cupo, los `populate` y la traduccion del `E11000` a un `409`. | No aplica reglas de negocio. |
+| **DTO** | Decide **que campos salen** por la api, incluidos los documentos relacionados por `populate`. | No consulta la base ni valida. |
+
+### DAO — el unico que toca Mongoose
+
+Los tres archivos de [`src/dao/mongo/`](src/dao/mongo/) son los **unicos del proyecto que importan un modelo**. Se puede verificar:
+
+```bash
+grep -rn "from '.*models/" src/    # solo devuelve los 3 DAO
+```
+
+Ahi adentro queda encerrado **todo** lo que es especifico de mongo: los operadores (`$in`, `$regex`, `$gte`), el `aggregate` que suma los cupos, la validacion de `ObjectId` (para que un id mal formado sea un `404` y no un `CastError` en `500`), los `populate` con su `select` y el codigo de error `11000` del indice unico. Cambiar mongo por otra persistencia es escribir otro DAO con la misma interfaz e inyectarlo: **ninguna capa de arriba se entera**.
+
+### Repository — el intermediario
+
+Cada repository recibe su DAO por constructor (`new EventsRepository(eventDAO)`), no lo instancia. Su valor no es reenviar llamadas sino **hablar el idioma del dominio** y componer:
+
+```js
+// repository: "traeme la pagina N del catalogo"  →  DAO: find + count
+async findPaginated({ filter, sort, page, limit }) {
+    const [docs, total] = await Promise.all([
+        this.dao.find({ filter, sort, skip: (page - 1) * limit, limit }),
+        this.dao.count(filter)
+    ]);
+    return { docs, total };
+}
+
+// repository: "cancelame esta inscripcion"  →  DAO: un update, nunca un delete
+async cancelTicket(id) {
+    return this.dao.updateById(id, { status: TICKET_STATUS.CANCELLED, cancelledAt: new Date() });
+}
+```
+
+El corte entre las dos capas es explicito: el repository dice **que** operacion del dominio se necesita, el DAO decide **como** se resuelve en mongo.
+
+### Services — donde vive el negocio
+
+Los services solo importan repositories (y otros services). Concentran las reglas de cupos, estados, duplicados, permisos sobre recursos propios y la notificacion por email — ver [`events.service.js`](src/services/events.service.js) y [`tickets.service.js`](src/services/tickets.service.js).
+
+Un detalle del diseño: cada service tiene **dos** formas de buscar un recurso.
+
+- `findEventOrFail(id)` / `findTicketOrFail(id)` → devuelven la **entidad de dominio** completa. Son de uso interno: las reglas necesitan `capacity`, `status` y `organizer` para decidir. Tiran el `404`.
+- `getEventById(id)` → la misma busqueda **envuelta en el DTO**. Es la que consume el controller.
+
+Asi la logica trabaja siempre con el dato completo y por la api sale unicamente lo que el DTO deja pasar. Por eso `tickets.service` pide `eventsService.findEventOrFail(...)`: necesita el cupo del evento, no su representacion publica.
+
+### DTO — que sale y que no
+
+Ninguna respuesta se arma con el documento crudo de la base. Los DTO son **whitelists**: si mañana el modelo suma un campo interno, no se filtra solo, hay que agregarlo a mano.
+
+| DTO | Se usa en | Campos |
+|-----|-----------|--------|
+| `UserDTO` | registro, login y `GET /api/users` | `id`, `first_name`, `last_name`, `email`, `role` |
+| `SessionUserDTO` | `GET /api/sessions/current` | `id`, `email`, `role` |
+| `UserRefDTO` | usuario **poblado** dentro de un evento o un ticket | `_id`, `first_name`, `last_name`, `email` (+ `role` si es el organizador) |
+| `EventDTO` | todas las rutas de eventos | los campos del evento + `organizer` pasado por `UserRefDTO` |
+| `EventRefDTO` | evento **poblado** dentro de un ticket | `_id`, `title`, `date`, `location` |
+| `TicketDTO` | todas las rutas de tickets | los campos del ticket + `user` y `event` pasados por su DTO |
+
+Dos cosas importantes:
+
+1. **El `password` no figura en ninguna lista**, ni hasheado. Y el filtro es doble: el DAO ya acota el `select` del `populate` (menos datos por la red) y el DTO vuelve a recortar del otro lado (garantia de que no sale por la api).
+2. **Cuando hay `populate`, el DTO tambien filtra el documento relacionado.** El `organizer` de un evento y el `user` de un ticket no se copian tal cual: pasan por `UserRefDTO`. Si la referencia **no** vino poblada, mongoose deja el `ObjectId` pelado y el DTO devuelve el id como string en vez de un objeto a medio llenar — que es exactamente lo que pasa con `user` en `GET /api/tickets/my-tickets`.
+
+Ademas los DTO descartan `__v` y cualquier campo interno del documento.
+
+### Autenticacion
+
+La autenticacion esta **centralizada en `config/passport.config.js`** (estrategias `register`, `login` y `current`), que orquestan la logica de negocio del `sessions.service.js`; la firma del JWT vive en `utils/jwt.js`, el bcrypt en `utils/hash.js`, y el middleware `authenticate.js` solo delega en `passport.authenticate(...)`. Nada de esto vive en la ruta ni en `app.js` (que unicamente hace `passport.initialize()`).
+
+### Manejo de errores centralizado
+
+**Toda** respuesta de error de la api sale de un unico lugar: [`middlewares/errorHandler.js`](src/middlewares/errorHandler.js), siempre con el mismo formato.
+
+```json
+{ "status": "error", "message": "Cupos insuficientes: quedan 2 lugares y pediste 5" }
+```
+
+El circuito es este:
+
+1. El service detecta una regla rota y tira `httpError(status, mensaje)` ([`utils/httpError.js`](src/utils/httpError.js)), que es un `Error` con su codigo http.
+2. `asyncHandler` ([`utils/asyncHandler.js`](src/utils/asyncHandler.js)) captura el rechazo de los handlers async y lo manda al `next(err)`. Ningun controller lleva `try/catch`.
+3. El `errorHandler` arma la respuesta con el status del error.
+
+Ademas **traduce los errores que llegan sin status** para que un dato mal formado no termine en un `500` que no le corresponde: un `CastError` de mongoose es un `400`, un `ValidationError` de schema es un `400` y un choque contra un indice `unique` (`E11000`) es un `409`.
+
+| Codigo | Cuando | Ejemplo |
+|:------:|--------|---------|
+| `400` | Datos invalidos | `La fecha del evento no puede ser pasada` |
+| `401` | Sin sesion / token invalido o expirado | `No autenticado` |
+| `403` | Con sesion, pero sin permiso (por rol o por propiedad del recurso) | `No podes gestionar un evento que no te pertenece` |
+| `404` | El recurso no existe (o el id no es valido) | `Evento no encontrado` |
+| `409` | Conflicto con el estado actual del dominio | `Ya tenes una inscripcion activa para este evento` |
+| `503` | Base de datos no disponible | `Base de datos no disponible` |
+| `500` | Cualquier falla no contemplada | `Error interno del servidor` |
+
+Los `4xx` explican que paso porque el cliente puede corregirlo. Un error **inesperado** (sin status propio) responde siempre el mensaje generico y su detalle real queda **solo en el log del servidor**, para no filtrar detalles de implementacion. Los `4xx` tampoco ensucian el log: son errores esperables, no fallas del servidor.
+
+### Como probar la arquitectura
+
+El comportamiento externo **no cambio**: las pruebas de las secciones siguientes siguen valiendo tal cual. Estos son los chequeos propios de la refactorizacion.
+
+```bash
+# 1. Solo los DAO importan modelos de mongoose (debe listar unicamente src/dao/mongo/*)
+grep -rn "from '.*models/" src/
+
+# 2. Ningun controller ni service importa un modelo o un DAO
+grep -rn "models/\|dao/" src/controllers/ src/services/    # sin resultados
+
+# 3. Flujo completo: registro -> login -> crear evento -> publicar -> inscribirse -> mis tickets -> cancelar
+curl -X POST http://localhost:8080/api/sessions/register -H "Content-Type: application/json" \
+  -c user.txt -d '{ "first_name": "Beto", "last_name": "Gomez", "email": "beto@mail.com", "password": "Secreta123" }'
+curl -X POST http://localhost:8080/api/sessions/login -H "Content-Type: application/json" \
+  -c user.txt -d '{ "email": "beto@mail.com", "password": "Secreta123" }'
+curl -X POST http://localhost:8080/api/events -H "Content-Type: application/json" -b organizer.txt \
+  -d '{ "title": "Maraton", "description": "10k", "category": "running", "location": "Parque", "date": "2027-10-01", "capacity": 2 }'
+curl -X PATCH http://localhost:8080/api/events/<eid>/status -H "Content-Type: application/json" \
+  -b organizer.txt -d '{ "status": "published" }'
+curl -X POST http://localhost:8080/api/events/<eid>/tickets -H "Content-Type: application/json" -b user.txt -d '{ "quantity": 1 }'
+curl http://localhost:8080/api/tickets/my-tickets -b user.txt
+curl -X PATCH http://localhost:8080/api/tickets/<tid>/cancel -b user.txt
+
+# 4. /current no incluye password
+curl http://localhost:8080/api/sessions/current -b user.txt      # -> { id, email, role }
+
+# 5. Un ticket con populate no incluye el password del usuario
+curl http://localhost:8080/api/events/<eid>/tickets -b organizer.txt   # user: { _id, first_name, last_name, email }
+
+# 6. Un error de negocio devuelve su codigo, no un 500
+curl -X POST http://localhost:8080/api/events/<eid>/tickets -b user.txt -d '{ "quantity": 999 }'   # -> 409
+
+# 7. Ruta protegida sin sesion -> 401; con sesion pero sin permisos -> 403
+curl http://localhost:8080/api/users                    # -> 401
+curl http://localhost:8080/api/users -b user.txt        # -> 403
+```
+
+### Casos cubiertos (arquitectura)
+
+- Los **modelos de Mongoose** se importan **unicamente** en los tres DAO; controllers y services no los ven.
+- Los **services** consumen repositories: ninguno importa un DAO ni un modelo.
+- Los **controllers** no calculan cupos, no validan estados ni resuelven permisos: solo leen el request y devuelven lo que el service les da.
+- **Ninguna respuesta expone `password`**, ni en texto plano ni hasheado: ni en el registro, ni en el login, ni en `/current`, ni en `GET /api/users`, ni en el `organizer` poblado de un evento, ni en el `user` poblado de un ticket.
+- Las respuestas tampoco arrastran `__v` ni campos internos.
+- Los errores de negocio devuelven `400` / `401` / `403` / `404` / `409` con el mensaje puntual — **nunca un `500`** —, todos con el mismo formato y armados por el mismo middleware.
+- El flujo completo (registro → login → crear evento → publicar → inscribirse → mis tickets → cancelar → volver a inscribirse con el cupo liberado) funciona igual que antes de la refactorizacion.
 
 ## Rutas disponibles
 

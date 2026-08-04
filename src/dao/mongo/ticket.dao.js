@@ -1,31 +1,30 @@
 import mongoose from 'mongoose';
 import { Ticket } from '../../models/Ticket.js';
 import { isDbConnected } from '../../config/db.js';
+import { httpError } from '../../utils/httpError.js';
 import { ACTIVE_TICKET_STATUS } from '../../config/ticketStatus.js';
 
-// datos del evento que viajan dentro de "mis tickets". es la lista que pide la
-// consigna: lo justo para que el usuario reconozca a que se anoto.
+// datos del evento que viajan dentro de "mis tickets": lo justo para que el usuario
+// reconozca a que se anoto.
 const EVENT_FIELDS = 'title date location';
 
 // datos del inscripto que ve el organizer en el listado de su evento. sin password
-// (ademas de que el modelo lo guarda hasheado) y sin el resto del perfil.
+// y sin el resto del perfil. igual que con el evento, el TicketDTO vuelve a filtrar
+// del otro lado.
 const USER_FIELDS = 'first_name last_name email';
 
 // el error de clave duplicada de mongo. lo tira el indice unico parcial de
 // (user, event) cuando dos inscripciones identicas entran a la vez.
 const DUPLICATE_KEY = 11000;
 
-const dbUnavailable = () => {
-    const err = new Error('Base de datos no disponible');
-    err.status = 503;
-    return err;
-};
-
+// Acceso a datos de inscripciones. Todo lo que sea sintaxis de mongo ($in, el
+// aggregate del cupo, la validacion de ObjectId, el codigo E11000) vive aca dentro:
+// el repository de arriba habla de dominio y no sabe que la base es mongo.
 class TicketDAO {
     // inscribirse necesita persistir si o si: sin base no hay nada que hacer, asi
     // que se avisa con un 503 en lugar de dejar la request en buffer.
     async create(ticketData) {
-        if (!isDbConnected()) throw dbUnavailable();
+        if (!isDbConnected()) throw httpError(503, 'Base de datos no disponible');
 
         try {
             const ticket = await Ticket.create(ticketData);
@@ -43,24 +42,22 @@ class TicketDAO {
             // carrera contra otra request. se traduce al mismo 409 que devuelve el
             // chequeo previo, asi el cliente ve un error de negocio y no un 500.
             if (error.code === DUPLICATE_KEY) {
-                const err = new Error('Ya tenes una inscripcion activa para este evento');
-                err.status = 409;
-                throw err;
+                throw httpError(409, 'Ya tenes una inscripcion activa para este evento');
             }
 
             throw error;
         }
     }
 
-    async getById(id) {
+    async findById(id) {
         if (!isDbConnected() || !mongoose.Types.ObjectId.isValid(id)) return null;
 
         return Ticket.findById(id).populate('event', EVENT_FIELDS).lean();
     }
 
-    // tickets del usuario autenticado, con el evento poblado. incluye los
-    // cancelados: son parte de su historial.
-    async getByUser(userId) {
+    // tickets de un usuario, con el evento poblado. incluye los cancelados: son
+    // parte de su historial.
+    async findByUser(userId) {
         if (!isDbConnected() || !mongoose.Types.ObjectId.isValid(userId)) return [];
 
         return Ticket.find({ user: userId })
@@ -70,7 +67,7 @@ class TicketDAO {
     }
 
     // inscriptos a un evento, para el organizer dueño o el admin.
-    async getByEvent(eventId) {
+    async findByEvent(eventId) {
         if (!isDbConnected() || !mongoose.Types.ObjectId.isValid(eventId)) return [];
 
         return Ticket.find({ event: eventId })
@@ -84,7 +81,7 @@ class TicketDAO {
     //
     // los cancelled quedan afuera del match, por eso cancelar libera el cupo solo:
     // no hay que devolverle lugares al evento a mano.
-    async countActiveByEvent(eventId) {
+    async countActiveQuantityByEvent(eventId) {
         if (!isDbConnected() || !mongoose.Types.ObjectId.isValid(eventId)) return 0;
 
         const [result] = await Ticket.aggregate([
@@ -109,7 +106,7 @@ class TicketDAO {
         }).lean();
     }
 
-    async update(id, data) {
+    async updateById(id, data) {
         if (!isDbConnected() || !mongoose.Types.ObjectId.isValid(id)) return null;
 
         return Ticket.findByIdAndUpdate(id, data, { new: true, runValidators: true })
